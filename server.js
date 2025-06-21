@@ -17,7 +17,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: 'https://disaster-response-ui-raghavarora01s-projects.vercel.app/', // Allow only frontend origin
+    origin: 'https://disaster-response-ui-raghavarora01s-projects.vercel.app', // Allow only frontend origin
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
   },
@@ -28,7 +28,7 @@ app.set('io', io);
 
 // Middleware
 app.use(cors({
-  origin: 'https://disaster-response-ui-raghavarora01s-projects.vercel.app/', // Same as frontend
+  origin: 'https://disaster-response-ui-raghavarora01s-projects.vercel.app', // Same as frontend
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
