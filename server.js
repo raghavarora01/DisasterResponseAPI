@@ -3,7 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
-
+import supabase from './models/supabase.js';
 import disasterRoutes from './routes/disaster.js';
 import geocodeRoutes from './routes/geocode.js';
 import resourceRoutes from './routes/resources.js';
@@ -25,7 +25,7 @@ const io = new Server(server, {
 
 // Attach socket.io instance to app for controller access
 app.set('io', io);
-
+app.set('supabase', supabase); // Set Supabase client
 // Middleware
 app.use(cors({
   origin: 'https://disaster-response-ui-raghavarora01s-projects.vercel.app', // Same as frontend
@@ -38,12 +38,14 @@ app.use('/api', geocodeRoutes);
 app.use('/api', resourceRoutes);
 app.use('/api', socialMediaRoutes); // /disasters/:id/social-media
 app.use('/api', verifyImageRoute);  // /disasters/:id/verify-image
-app.use('/api', authMiddleware, disasterRoutes); // Auth-protected disaster routes
+ // Auth-protected disaster routes
 
 // Health check
 app.get('/', (req, res) => {
   res.send('Disaster Response Platform Backend is running ✅');
 });
+
+app.use('/api', authMiddleware, disasterRoutes);
 
 // WebSocket Events
 io.on('connection', (socket) => {
