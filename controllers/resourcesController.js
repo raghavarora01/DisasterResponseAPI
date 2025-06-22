@@ -1,91 +1,6 @@
-// In-memory store for resources (replace with database in production)
-let resources = [
-  {
-    id: '1',
-    disaster_id: '1',
-    name: 'Red Cross Shelter',
-    type: 'shelter',
-    location_name: 'Downtown Community Center',
-    latitude: 40.7128,
-    longitude: -74.0060,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: '2',
-    disaster_id: '1',
-    name: 'Downtown Hospital',
-    type: 'hospital',
-    location_name: '123 Main St, New York, NY',
-    latitude: 40.7110,
-    longitude: -74.0080,
-    created_at: new Date(Date.now() - 3600000).toISOString()
-  }
-];
 
-// Mock Supabase for now - replace with actual import when available
-const supabase = {
-  rpc: async (fn, params) => {
-    // For get_nearby_resources function
-    if (fn === 'get_nearby_resources') {
-      const { disaster_id_input, user_lat, user_lon, radius_meters } = params;
-      
-      // Simple distance calculation (in km)
-      const calculateDistance = (lat1, lon1, lat2, lon2) => {
-        const R = 6371; // Earth's radius in km
-        const dLat = (lat2 - lat1) * Math.PI / 180;
-        const dLon = (lon2 - lon1) * Math.PI / 180;
-        const a = 
-          Math.sin(dLat/2) * Math.sin(dLat/2) +
-          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-          Math.sin(dLon/2) * Math.sin(dLon/2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-        return R * c;
-      };
-
-      // Filter resources by disaster ID and calculate distances
-      const nearbyResources = resources
-        .filter(resource => resource.disaster_id === disaster_id_input.toString())
-        .map(resource => ({
-          ...resource,
-          distance: calculateDistance(
-            user_lat, 
-            user_lon, 
-            resource.latitude, 
-            resource.longitude
-          )
-        }))
-        .filter(resource => resource.distance <= (radius_meters || 10000) / 1000); // Convert meters to km
-
-      return { 
-        data: nearbyResources,
-        error: null 
-      };
-    }
-    
-    return { data: null, error: 'Function not implemented' };
-  },
-  
-  from: () => ({
-    insert: async (data) => {
-      const newResource = {
-        id: (resources.length + 1).toString(),
-        ...data,
-        created_at: new Date().toISOString()
-      };
-      resources.push(newResource);
-      return { data: [newResource], error: null };
-    },
-    select: () => ({
-      order: () => ({
-        data: resources,
-        error: null
-      })
-    })
-  })
-};
-
-// GET /api/disasters/:id/resources?lat=...&lon=...
-const getNearbyResources = async (req, res) => {
+import supabase from "../models/supabase.js";
+export const getNearbyResources = async (req, res) => {
   const { id } = req.params;
   const { lat, lon } = req.query;
 
@@ -98,12 +13,12 @@ const getNearbyResources = async (req, res) => {
       disaster_id_input: parseInt(id),
       user_lat: parseFloat(lat),
       user_lon: parseFloat(lon),
-      radius_meters: 10000 // optional
+      radius_meters: 10000 // Default radius of 10km
     });
 
     if (error) throw error;
 
-    // Emit socket event
+    // Emit socket event for real-time updates
     const io = req.app.get('io');
     io.emit('resources_updated', {
       disasterId: id,
@@ -118,47 +33,69 @@ const getNearbyResources = async (req, res) => {
   }
 };
 
-// GET /api/resources - Get all resources
-const getAllResources = async (req, res) => {
+export const getAllResources = async (req, res) => {
   try {
-    // In a real app, you would fetch from your database here
-    res.json(resources);
+    const { data, error } = await supabase
+      .from('resources')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching resources:', error);
+    console.error('Error fetching resources:', error.message);
     res.status(500).json({ error: 'Failed to fetch resources' });
   }
 };
 
-// POST /api/resources - Create a new resource
-const createResource = async (req, res) => {
+export const createResource = async (req, res) => {
+  const { disaster_id, name, location_name, type } = req.body;
+  const user = req.user;
+
+  if (!disaster_id || !name || !location_name || !type) {
+    return res.status(400).json({ error: 'Missing required fields: disaster_id, name, location_name, type' });
+  }
+
   try {
-    const { disaster_id, name, location_name, type } = req.body;
-    
-    if (!disaster_id || !name || !location_name || !type) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Geocode the location if latitude/longitude aren't provided
+    let coordinates = { lat: null, lng: null };
+    if (!req.body.latitude || !req.body.longitude) {
+      coordinates = await geocodeLocation(location_name);
+    } else {
+      coordinates = { lat: parseFloat(req.body.latitude), lng: parseFloat(req.body.longitude) };
     }
-    
-    // In a real app, you would save to your database here
-    const newResource = {
-      id: (resources.length + 1).toString(),
-      disaster_id,
+    const locationPoint = `POINT(${coordinates.lng} ${coordinates.lat})`;
+
+    const resourceEntry = {
+      disaster_id: parseInt(disaster_id),
       name,
       location_name,
+      location: locationPoint,
       type,
       created_at: new Date().toISOString()
     };
-    
-    resources.push(newResource);
-    
-    res.status(201).json(newResource);
+
+    const { data, error } = await supabase
+      .from('resources')
+      .insert(resourceEntry)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    const io = req.app.get('io');
+    io.emit('resources_updated', {
+      disasterId: disaster_id,
+      resources: [data],
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(201).json(data);
   } catch (error) {
-    console.error('Error creating resource:', error);
+    console.error('Error creating resource:', error.message);
     res.status(500).json({ error: 'Failed to create resource' });
   }
 };
 
-export { 
-  getNearbyResources,
-  getAllResources,
-  createResource
-};
+export default { getNearbyResources, getAllResources, createResource };
